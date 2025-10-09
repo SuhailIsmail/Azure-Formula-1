@@ -1,0 +1,55 @@
+# Databricks notebook source
+dbutils.widgets.text('p_file_date','2021-03-21')
+v_file_date = dbutils.widgets.get('p_file_date')
+
+# COMMAND ----------
+
+# MAGIC %run "../includes/configuration"
+
+# COMMAND ----------
+
+# MAGIC %run "../includes/common_function"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Find race years for which the data is to be reprocessed
+
+# COMMAND ----------
+
+race_results_df = spark.read.format("delta").load(f'{presentation_folder}/race_results')\
+    .filter(f"file_date = '{v_file_date}'")
+
+# COMMAND ----------
+
+race_year_list = df_column_to_list(race_results_df,'race_year')
+
+# COMMAND ----------
+
+from pyspark.sql.functions import sum,when,count,col,desc,rank
+from pyspark.sql.window import Window
+
+# COMMAND ----------
+
+race_results = spark.read.format("delta").load(f'{presentation_folder}/race_results')\
+    .filter(col("race_year").isin(race_year_list))
+
+# COMMAND ----------
+
+constructor_stand = race_results.groupBy('race_year','team')\
+            .agg(sum('points').alias('total_points'),
+            count(when(col('position')==1, True)).alias('wins'))
+
+# COMMAND ----------
+
+constructor_rank = Window.partitionBy('race_year').orderBy(desc('total_points'),desc('wins'))
+final_df = constructor_stand.withColumn('rank', rank().over(constructor_rank))
+
+# COMMAND ----------
+
+display(final_df.filter('race_year=2021'))
+
+# COMMAND ----------
+
+merge_condition = "tgt.race_year = src.race_year AND tgt.team = src.team "
+merge_delta(final_df,'f1_presentation','constructor_standings',presentation_folder, merge_condition,'race_year')
